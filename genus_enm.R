@@ -89,9 +89,9 @@ if (file.exists(paste0('./species_records/03_', gsub(' ', '_', tolower(sp)), '_f
     occsRaw <- data.frame()
     for(sp in speciesList) {
       species <- gsub(tolower(sp), pattern=' ', replacement='_')
-      speciesFileName <- paste0('./data_and_analyses/species_records/01_', 
+      speciesFileName <- paste0('./species_records/01_', 
                                 gsub(tolower(species), pattern = ' ', 
-                                     replacement = '_'), '_retained_records.rds')
+                                     replacement = '_'), '_retained_records.rda')
       
       occs_current <- readRDS(speciesFileName)
       occsRaw <- rbind(occsRaw, occs_current)
