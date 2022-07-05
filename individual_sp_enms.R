@@ -1,7 +1,7 @@
-# ENM Template, Fraxinus
+# ENM Template, Fagus
 # Author: Lauren Jenkins
 # 25 January 2022
-# Last updated: 7 June 2022
+# Last updated: 13 June 2022
 
 rm(list = ls())
 
@@ -16,7 +16,7 @@ library(ggplot2)
 library(maps)
 library(rnaturalearth)
 library(rnaturalearthdata)
-library(rnaturalearthhires) 
+# library(rnaturalearthhires) 
 
 # for handling rasters # 
 library(raster)
@@ -32,8 +32,36 @@ library(tidyr)
 
 # enm tools #
 library(enmSdm)
+library(maxnet)
 
-setwd('/Volumes/lj_mac_22/MOBOT/by_genus/fraxinus')
+# if running on the cluster #
+cluster <- T
+
+if(cluster == T) { # constants for running on cluster
+  args <- commandArgs(TRUE)
+  gcmList <- args[1]
+  gcmList <- unlist(gcmList)
+  genus <- args[2]
+  genus <- as.character(genus)
+  speciesList <- args[3]
+  speciesList <- strsplit(speciesList, split = ', ')
+  speciesList <- unlist(speciesList)
+  
+  baseFolder <- '/mnt/research/TIMBER/PVMvsENM/'
+  setwd(paste0(baseFolder, genus, '/in/'))
+  
+} else { # constants for running locally
+  ## genus constants ##
+  genus <- 'fraxinus'
+  speciesList <- paste0('Fraxinus ', 
+                        c('americana', 'caroliniana','cuspidata',
+                          'greggii', 'nigra', 'pennsylvanica', 
+                          'profunda', 'quadrangulata'))
+  
+  baseFolder <- '/Volumes/lj_mac_22/MOBOT/by_genus/'
+  setwd(paste0(baseFolder, genus))
+  gcmList <- c('hadley', 'ccsm', 'ecbilt') # general circulation models for env data
+}
 
 # set constants #
 nad27_crs <- getCRS('nad27')
@@ -42,33 +70,224 @@ wgs84_crs <- getCRS('wgs84')
 ll <- c('longitude', 'latitude')
 
 yrs <- seq(22 , 1, by = -1) # timestep indicies helper
+climYears <- seq(21000, 0, by=-1000)
 climYear <- 0 # only modeling present-day in this script
 
 pc <- 5 # number of principal components used from environmental data
 
-speciesList <- paste0('Fraxinus ', 
-                      c('americana', 'caroliniana', 'cuspidata', 'greggii', 
-                        'nigra', 'pennsylvanica', 'profunda', 'quadrangulata'))
-gcmList <- c('hadley', 'ccsm', 'ecbilt') # general circulation models for env data
-
 # reference raster from ccsm env data for cell size, used in thinning
-lorenzRast <- raster::raster('/Volumes/lj_mac_22/MOBOT/PVMvsENM/data_and_analyses/env_data/Lorenz/V2/ccsm_21-0k_all_tifs_LJ/0BP/an_avg_ETR.tif')
+lorenzRast <- raster::raster(paste0(baseFolder, 'env_data/ccsm/tifs/0BP/an_avg_ETR.tif'))
 
-sink('./cleaning_script.txt')
+## helper functions ##
+
+# function for retrieving clipped PCA climate rasters for a given year #
+getClimRasts <- function(pc, climYear) { # retrieve clipped climate rasters for a given year
+  
+  # load climate for given gcm 
+  load(paste0(baseFolder, 'env_data/', as.character(gcm), '/PCA_climate_rasters_pc', pc, '.Rdata'))
+  load(paste0(baseFolder, 'env_data/', as.character(gcm), '/PCA_prcomp_pc', pc, '.Rdata'))
+  
+  if(exists('lorenz')) {
+    clim <- lorenz
+    rm(lorenz)
+  }
+  
+  # set constants for given gcm
+  fileName <- paste0(baseFolder, 'env_data/', gcm, '/clipped_data/envDataClipped_', 
+                     climYear, 'YBP_pc', pc, '.tif')
+  if(!dir.exists(paste0(baseFolder, 'env_data/', gcm, '/clipped_data'))) {
+    dir.create(paste0(baseFolder, 'env_data/', gcm, '/clipped_data')) }
+  vars <- names(clim[[1]])
+  
+  if(gcm == 'hadley') {
+    land <- raster(paste0(baseFolder, 'env_data/', gcm, '/tifs/', 
+                          vars[1], '/', vars[1],
+                          '_', climYear, 'ybp.tif'))
+  } else if (gcm == 'ccsm' | gcm == 'ecbilt') {
+    land <- raster(paste0(baseFolder, 'env_data/', gcm,
+                          '/tifs/', climYear, 'BP/', vars[1], '.tif')) 
+  }
+  
+  ## load environment data from PCA ##
+  if (file.exists(fileName)) {  # if already clipped to respective year, load that 
+    envData <- brick(fileName)
+    names(envData) <- paste0('pca', 1:pc) # rename raster layers to match pc
+  } else { # otherwise, clip data to correct climate year
+    pcPrediction <- list()
+    
+    for (i in 1:length(clim)) { # label each env layer by variable name and year
+      names(clim[[i]]) <- vars
+      pcPrediction[i] <- raster::predict(clim[[i]], pca, index = 1:pc)
+      names(pcPrediction[[i]]) <- paste0("pc", 1:pc, "_", (i-1)*1000, "KYBP")
+    }
+    
+    envDataPca <- stack(pcPrediction)
+    
+    envYr <- pcPrediction[[(climYear/1000) + 1]] # keep only the PCA rasters for given climate year
+    names(envYr) <- paste0('pca', 1:pc) # label layers by pc
+    
+    ## sanity check for ensuring the rasters are in the correct projection
+    # print("Ensure that the projection of these rasters is WGS84:")
+    # print(paste0("Projection of envYr = ", projection(envYr)))
+    
+    envDataClipped <- list()
+    
+    for (n in 1:nlayers(envYr)) { # clip PCAs to study extent for given species
+      x <- envYr[[n]]
+      x <- crop(x, extent(studyRegionRasts[[n]]))
+      projection(x) <- getCRS("WGS84")
+      envDataClipped[[n]] <- x
+    }
+    
+    envData <- stack(envDataClipped)
+    
+    # plot(envData) # plot clipped environmental pca rasters
+    writeRaster(envData, fileName, format = 'GTiff', overwrite = T) # save clipped data
+    
+  } 
+  
+  return(envData)
+  
+}
+
+# function for calculating the proper buffer distance to include desired % of occurrences #
+calculate_buffer <- function(t) {
+  while (TRUE) {
+    t <- t + 10 # increase threshold value by 10 each iteration
+    buffer_distance_temp <- as_units(t, "km") # convert to km units
+    range_buffer <- st_buffer(rangeMapAlb, dist = buffer_distance_temp)
+    
+    # only keeped occurrences within buffered distance
+    speciesSf_thinned_buffered <- speciesSf_thinnedAlb %>%
+      mutate(within_range = lengths(st_within(x = speciesSf_thinnedAlb,
+                                              y = rangeMapAlb)),
+             within_buffer = lengths(st_within(x = speciesSf_thinnedAlb,
+                                               y = range_buffer)))
+    
+    ## sanity checking ... ##
+    ## uncomment the following lines to see how the # of occurrences outside
+    ## the buffer decreases as the buffer distance increases
+    
+    cat(paste0("Buffer distance = ", t, " km\n"))
+    cat(paste0("Number of occurrences outside buffer = ",
+               length(which(speciesSf_thinned_buffered$within_buffer == 0)), '\n'))
+    
+    # if buffer has reached the thresholded value, stop increasing the buffer
+    # & save it here
+    if(length(which(speciesSf_thinned_buffered$within_buffer == 0)) < threshold) {
+      if (t < 200) { # to accommodate for species with very few records,
+        # if the calculated buffer is < 200 km,
+        # double it to ensure enough records are included in model
+        
+        cat(paste0('Yes, buffer distance is < 200 (', t, ' km), so doubling buffer distance...\n'))
+        buffer_distance <- as_units((t*2), 'km') # double buffer distance
+        
+        cat(paste0('New buffer distance = ', buffer_distance, ' km\n'))
+        range_buffer <- st_buffer(rangeMapAlb, dist = buffer_distance)
+        
+        # recalculate buffers with new buffer distance
+        speciesSf_thinned_buffered <<- speciesSf_thinnedAlb %>%
+          mutate(within_range = lengths(st_within(x = speciesSf_thinnedAlb,
+                                                  y = rangeMapAlb)),
+                 within_buffer = lengths(st_within(x = speciesSf_thinnedAlb,
+                                                   y = range_buffer)))
+        speciesSf_occs_buffered <<- speciesSf_occsAlb %>% 
+          mutate(within_range = lengths(st_within(x = speciesSf_occsAlb,
+                                                  y = rangeMapAlb)),
+                 within_buffer = lengths(st_within(x = speciesSf_occsAlb,
+                                                   y = range_buffer)))
+        
+        # save buffer data to use later
+        save(buffer_distance, range_buffer, speciesSf_thinned_buffered, 
+             speciesSf_occs_buffered, file = bufferFileName)
+      } else { # if the calculated buffer is larger than 200 km, use that distance 
+        buffer_distance <<- buffer_distance_temp
+        speciesSf_occs_buffered <<- speciesSf_occsAlb %>% 
+          mutate(within_range = lengths(st_within(x = speciesSf_occsAlb,
+                                                  y = rangeMapAlb)),
+                 within_buffer = lengths(st_within(x = speciesSf_occsAlb,
+                                                   y = range_buffer)))
+        
+        # save buffer data to use later
+        save(buffer_distance, range_buffer, speciesSf_thinned_buffered, 
+             speciesSf_occs_buffered, file = bufferFileName)
+      }
+      break
+    }
+  }
+}
+
+# function for predictions across time steps #
+getPredictions <- function(speciesAb_, pc) { # predict suitability for a given year
+  
+  predictors <- c(paste0('pca', 1:pc))
+  
+  for (yr in climYears) {
+    climate <- getClimRasts(pc = 5, climYear = yr) # retrieve clipped climate for given year
+    # plot(climate[[1]], main = paste0(climYear, ' ybp')) 
+    
+    # predict suitability #
+    thisPred <- predict(climate[[predictors]], 
+                        envModel, 
+                        clamp = F, 
+                        type='cloglog')
+    names(thisPred) <- (paste0(yr, ' ybp'))
+    # plot(thisPred, main = paste0("prediction at ", climYear, " ybp"))
+    
+    preds <- if (exists('preds')) {
+      stack(preds, thisPred)
+    } else {
+      thisPred
+    }
+    
+  }
+  
+  return(preds)
+  
+}
+
+getBG <- function(bgFileName, calibRegion) {
+  # get 20,000 random background sites from calibration region
+  bgTestSpAlb <- suppressWarnings(sp::spsample(calibRegion, n=20000, 
+                                               type='random', iter = 10))
+  
+  bgTestSp <- sp::spTransform(bgTestSpAlb, wgs84_crs) # transform to wgs84
+  bgCalib <- as.data.frame(coordinates(bgTestSp)) # lat/long of background sites
+  names(bgCalib) <- ll
+  
+  save(bgTestSp, bgCalib, file = bgFileName, compress = T, overwrite = T)
+}
+
+## start cleaning ##
+
+sink('./ENM_script.txt')
 for(sp in speciesList) {
   cat(paste0('SPECIES = ', sp, '\n'))
   speciesAb_ <- sub("(.{4})(.*)", "\\1_\\2", 
-                    paste0(substr(sp,1,4), toupper(substr(sp,10,10)), substr(sp,11,13)))
+                    paste0(substr(sp,1,4), toupper(substr(sub("^\\S+\\s+", '', sp),1,1)), 
+                           substr(sub("^\\S+\\s+", '', sp),2,4)))
   rangeName <- paste0('littleRange_', gsub('_', '', speciesAb_))
   
   # load Little range map for given species
-  load(paste0('./range_maps/', rangeName, '.Rdata'))
+  if (cluster == T) {
+    range <- paste0('./USTreeAtlas/SHP/', 
+                    tolower(gsub('_', '', speciesAb_)), '/',
+                    tolower(gsub('_', '', speciesAb_)),
+                    '.shp')
+  } else {
+    range <- paste0('/Volumes/lj_mac_22/MOBOT/USTreeAtlas/SHP/', 
+                    tolower(gsub('_', '', speciesAb_)), '/',
+                    tolower(gsub('_', '', speciesAb_)),
+                    '.shp')
+  }
+  
+  range <- suppressWarnings(shapefile(range))
+  projection(range) <- enmSdm::getCRS('nad27')
+  range <- range[range$CODE == 1, ] # remove holes
   
   if (file.exists(paste0('./species_records/03_', gsub(' ', '_', tolower(sp)), '_final_records.rData'))) { # if already cleaned, load cleaned data set
     print('Already cleaned!\n')
   } else { # otherwise, clean the data! #
-    range <- rangeMap
-    rm(rangeMap)
     
     recordsFileName <- paste0('./species_records/01_', 
                               gsub(' ', '_', tolower(sp)), 
@@ -97,6 +316,11 @@ for(sp in speciesList) {
       # remove records before 1900
       occs$year <- substr(occs$date_collected, 1, 4)
       occs <- occs[occs$year >= 1900, ]
+      
+      # remove records outside of study region countries
+      occs <- occs[(occs$country == 'United States' 
+                    | occs$country == 'Canada'
+                    | occs$country == 'Mexico' ),]
       
       # if date_collected column is duplicated, remove one of them
       occs <- occs[!duplicated(as.list(occs))]
@@ -128,7 +352,7 @@ for(sp in speciesList) {
       
       # how many are deemed "imprecise"?
       cat(paste0("Number of occurrences with precision > 1,000 m = ", 
-                   length(which(occs$precision > 1000)), '\n'))
+                 length(which(occs$precision > 1000)), '\n'))
       
       # ...and remove occurrences where precision > 1,000 m
       occs <- occs[which(occs$precision <= 1000), ]
@@ -209,73 +433,6 @@ for(sp in speciesList) {
       speciesSf_thinnedAlb <- st_transform(speciesSf_thinned, getCRS('albersNA'))
       speciesSf_occsAlb <- st_transform(speciesSf_occs, getCRS('albersNA'))
       
-      # function for calculating the proper buffer distance to include desired % of occurrences
-      calculate_buffer <- function(t) {
-        while (TRUE) {
-          t <- t + 10 # increase threshold value by 10 each iteration
-          buffer_distance_temp <- as_units(t, "km") # convert to km units
-          range_buffer <- st_buffer(rangeMapAlb, dist = buffer_distance_temp)
-          
-          # only keeped occurrences within buffered distance
-          speciesSf_thinned_buffered <- speciesSf_thinnedAlb %>%
-            mutate(within_range = lengths(st_within(x = speciesSf_thinnedAlb,
-                                                    y = rangeMapAlb)),
-                   within_buffer = lengths(st_within(x = speciesSf_thinnedAlb,
-                                                     y = range_buffer)))
-          
-          ## sanity checking ... ##
-          ## uncomment the following lines to see how the # of occurrences outside
-          ## the buffer decreases as the buffer distance increases
-          
-          cat(paste0("Buffer distance = ", t, " km\n"))
-          cat(paste0("Number of occurrences outside buffer = ",
-                       length(which(speciesSf_thinned_buffered$within_buffer == 0)), '\n'))
-
-          # if buffer has reached the thresholded value, stop increasing the buffer
-          # & save it here
-          if(length(which(speciesSf_thinned_buffered$within_buffer == 0)) < threshold) {
-            if (t < 200) { # to accommodate for species with very few records,
-              # if the calculated buffer is < 200 km,
-              # double it to ensure enough records are included in model
-              
-              cat(paste0('Yes, buffer distance is < 200 (', t, ' km), so doubling buffer distance...\n'))
-              buffer_distance <- as_units((t*2), 'km') # double buffer distance
-              
-              cat(paste0('New buffer distance = ', buffer_distance, ' km\n'))
-              range_buffer <- st_buffer(rangeMapAlb, dist = buffer_distance)
-              
-              # recalculate buffers with new buffer distance
-              speciesSf_thinned_buffered <<- speciesSf_thinnedAlb %>%
-                mutate(within_range = lengths(st_within(x = speciesSf_thinnedAlb,
-                                                        y = rangeMapAlb)),
-                       within_buffer = lengths(st_within(x = speciesSf_thinnedAlb,
-                                                         y = range_buffer)))
-              speciesSf_occs_buffered <<- speciesSf_occsAlb %>% 
-                mutate(within_range = lengths(st_within(x = speciesSf_occsAlb,
-                                                        y = rangeMapAlb)),
-                       within_buffer = lengths(st_within(x = speciesSf_occsAlb,
-                                                         y = range_buffer)))
-              
-              # save buffer data to use later
-              save(buffer_distance, range_buffer, speciesSf_thinned_buffered, 
-                   speciesSf_occs_buffered, file = bufferFileName)
-            } else { # if the calculated buffer is larger than 200 km, use that distance 
-              buffer_distance <<- buffer_distance_temp
-              speciesSf_occs_buffered <<- speciesSf_occsAlb %>% 
-                mutate(within_range = lengths(st_within(x = speciesSf_occsAlb,
-                                                        y = rangeMapAlb)),
-                       within_buffer = lengths(st_within(x = speciesSf_occsAlb,
-                                                         y = range_buffer)))
-              
-              # save buffer data to use later
-              save(buffer_distance, range_buffer, speciesSf_thinned_buffered, 
-                   speciesSf_occs_buffered, file = bufferFileName)
-            }
-            break
-          }
-        }
-      }
-      
       t <- 10 # start buffer distance at 10 km
       
       # calculate buffer
@@ -293,13 +450,13 @@ for(sp in speciesList) {
       filter(within_buffer > 0)
     
     # buffers create circles around the edges of the range map
-      # since the range map isn't one succinct polygon, there are serveral overlapping circles
-      # so we need to unionize them to create one all-encompassing buffer
+    # since the range map isn't one succinct polygon, there are serveral overlapping circles
+    # so we need to unionize them to create one all-encompassing buffer
     range_buffer_final <- st_union(range_buffer)
     
     finalRecordsFileName <- paste0('./species_records/03_', 
-                                     gsub(' ', '_', tolower(sp)), 
-                                     '_final_records.rData')
+                                   gsub(' ', '_', tolower(sp)), 
+                                   '_final_records.rData')
     
     save(speciesSf_final, range_buffer_final, file = finalRecordsFileName)
     
@@ -381,7 +538,7 @@ for(sp in speciesList) {
       ylab("Latitude") +
       ggtitle(paste0(sp, ' occurences'), 
               subtitle = paste0("(Cleaned, thinned, and duplicates eliminated, with buffer = ",
-                                                           buffer_distance, 
+                                buffer_distance, 
                                 " km)")) +
       theme(panel.grid.major = element_line(color = gray(0.5), 
                                             linetype = "dashed", 
@@ -395,73 +552,22 @@ for(sp in speciesList) {
     
     #   How many occurrences fell outside of the buffer?
     cat(paste0("Number of occurrences outside buffer & excluded = ", 
-                 length(which(speciesSf_thinned_buffered$within_buffer == 0)), '\n'))
-  
+               length(which(speciesSf_thinned_buffered$within_buffer == 0)), '\n'))
+    
   }
-
-  sink('./ENM_script.txt')
+  
+  ## start modeling ##
+  
   for (gcm in gcmList) {
+    gcm <- gsub('\'', '', gcm)
     cat(paste0('\nGCM = ', gcm, ', Species: ', sp, '\n'))
     
     # identify study region
-    studyRegionFileName <- '/Volumes/lj_mac_22/pollen/predictions-FRAXINUS_meanpred_iceMask.tif'
+    studyRegionFileName <- paste0('./pollen/predictions-', 
+                                  toupper(genus), '_meanpred_iceMask.tif')
     studyRegionRasts <- brick(studyRegionFileName)
     
-    # load climate for given gcm 
-    load(paste0('/Volumes/lj_mac_22/MOBOT/by_genus/env_data/', gcm, 
-                '/PCA_climate_rasters_pc', pc, '.Rdata'))
-    load(paste0('/Volumes/lj_mac_22/MOBOT/by_genus/env_data/', gcm, 
-                '/PCA_prcomp_pc', pc, '.Rdata'))
-    
-    # set constants for given gcm
-    fileName <- paste0('/Volumes/lj_mac_22/MOBOT/by_genus/env_data/', gcm, 
-                       '/clipped_data/envDataClipped_', climYear, 'YBP_pc', pc, '.tif')
-    vars <- names(clim[[1]])
-    
-    # set constants for Lorenz gcm's 
-    if (gcm == 'ccsm' | gcm == 'ecbilt') {
-      clim <- lorenz
-      workingFolder <- paste0('/Volumes/lj_mac_22/MOBOT/by_genus/env_data/', gcm, 
-                              '/tifs/', climYear, 'BP')
-      vars <- names(clim[[1]])
-    }
-    
-    ## load environment data from PCA ##
-    if (file.exists(fileName)) {  # if already clipped to respective year, load that 
-      envData <- brick(fileName)
-      names(envData) <- paste0('pca', 1:pc) # rename raster layers to match pc
-    } else { # otherwise, clip data to correct climate year
-      pcPrediction <- list()
-      
-      for (i in 1:length(clim)) { # label each env layer by variable name and year
-        names(clim[[i]]) <- vars
-        pcPrediction[i] <- raster::predict(clim[[i]], pca, index = 1:pc)
-        names(pcPrediction[[i]]) <- paste0("pc", 1:pc, "_", (i-1)*1000, "KYBP")
-      }
-      
-      envDataPca <- stack(pcPrediction)
-      
-      envYr <- pcPrediction[[(climYear/1000) + 1]] # keep only the PCA rasters for given climate year
-      names(envYr) <- paste0('pca', 1:pc) # label layers by pc
-      
-      ## sanity check for ensuring the rasters are in the correct projection
-        # print("Ensure that the projection of these rasters is WGS84:")
-        # print(paste0("Projection of envYr = ", projection(envYr)))
-      
-      envDataClipped <- list()
-     
-      for (n in 1:nlayers(envYr)) { # clip PCAs to study extent for given species
-        x <- envYr[[n]]
-        x <- crop(x, extent(studyRegionRasts[[n]]))
-        projection(x) <- getCRS("WGS84")
-        envDataClipped[[n]] <- x
-      }
-      
-      envData <- stack(envDataClipped)
-      
-      # plot(envData) # plot clipped environmental pca rasters
-      writeRaster(envData, fileName, format = 'GTiff', overwrite = T)
-    } 
+    envData <- getClimRasts(pc, climYear) # retrieve clipped env data for given climate year
     
     recordsFileName <- paste0('./species_records/03_', 
                               gsub(' ', '_', tolower(sp)), 
@@ -520,7 +626,7 @@ for(sp in speciesList) {
     load(bufferFileName)
     
     ## calculate calibration region at 320-km to extract bg sites from ##
-      # draw from all of NA #
+    # draw from all of NA #
     calibBuffer <- st_buffer(st_transform(st_as_sf(x = recordsSp), getCRS('albersNA')),
                              dist = as_units(320, 'km'))
     calibBuffer <- st_union(calibBuffer) # unionize
@@ -530,20 +636,13 @@ for(sp in speciesList) {
     calibRegionSpWgs <- sp::spTransform(calibRegionSpAlb, getCRS('wgs84', TRUE))
     
     # set constants for retrieving background sites #
-    bgFileName <- './background_sites/Random Background Sites across Study Region.Rdata'
+    bgFileName <- paste0(baseFolder, 
+                         'background_sites/Random Background Sites across Study Region.Rdata')
     
     # load bg sites in calibration region if they have already been defined (bgTestSp, bgCalib, bgEnv, bg)
-    if (file.exists(bgFileName)) load(bgFileName) else { 
-      # otherwise, get 20,000 random background sites from calibration region
-      bgTestSpAlb <- suppressWarnings(sp::spsample(calibRegionSpAlb, n=20000, 
-                                                   type='random', iter = 10))
-      
-      bgTestSp <- sp::spTransform(bgTestSpAlb, wgs84_crs) # transform to wgs84
-      bgCalib <- as.data.frame(coordinates(bgTestSp)) # lat/long of background sites
-      names(bgCalib) <- ll
-      
-      save(bgTestSp, bgCalib, file = bgFileName, compress = T, overwrite = T)
-    }
+    # otherwise, define bg points
+    if(!file.exists(bgFileName)) getBG(bgFileName, calibRegionSpAlb)
+    load(bgFileName)
     
     # plot the bg sites to verify
     plot(bgTestSp, pch = 16, cex = 0.5, col = "red", 
@@ -577,12 +676,14 @@ for(sp in speciesList) {
     env <- env[complete.cases(env), ] # remove NA values
     
     ## run maxent for species ##
-      # model tuning for easy fine-tuning later
+    # model tuning for easy fine-tuning later
     envModel_tune <- enmSdm::trainMaxNet(data = env, resp = 'presBg', 
                                          classes = 'lpq', out = c('models', 'tuning'))
     envModel <- envModel_tune$models[[1]] # select best fitted model
     
     predictors <- c(paste0('pca', 1:pc))
+    
+    if(!dir.exists(paste0('./models/predictions/', speciesAb_))) dir.create(paste0('./models/predictions/', speciesAb_))
     
     # prediction for given year
     envMap <- predict(
@@ -595,12 +696,16 @@ for(sp in speciesList) {
       overwrite = T,
       type='cloglog')
     
+    # remove XML file if it's created
+    file.remove(list.files(path = paste0('./models/predictions/', speciesAb_, '/'),
+                           pattern = '.xml',
+                           full.names = T))
+    
     envMapSp <- rasterToPolygons(envMap) # convert to spatial object for plotting
     
-    plot(rangeMap, border = 'blue', main = paste0('Maxent output, ', sp,
-                                                  ' occurrences'))
+    plot(range, border = 'blue', main = paste0('Maxent output, ', sp))
     plot(envMap, add = TRUE)
-    plot(rangeMap, border = 'blue', add = TRUE)
+    plot(range, border = 'blue', add = TRUE)
     map("state", add = TRUE)
     map("world", add = TRUE)
     points(records$longitude, records$latitude, pch = 16, cex = 0.6, col = 'red')
@@ -608,15 +713,46 @@ for(sp in speciesList) {
     plot(envMap, main = paste0('Maxent output, ', 
                                sp,
                                ' occurrences'))
-    plot(rangeMap, border = 'blue', add = TRUE)
+    plot(range, border = 'blue', add = TRUE)
     
     modelFileName <- paste0('./models/', speciesAb_, '_Maxent_PC', 
-                            pc, '_GCM_', gcm, '.Rdata')
+                            pc, '_GCM_', gcm, '.rData')
     save(envModel, file = modelFileName, compress = T, overwrite = T) # save model
     
     outputFileName <- paste0('./models/predictions/', speciesAb_, 
-                              '/GCM_', gcm, '_PC', pc, '.rData')
-    save(rangeMap, envMap, envModel, records, file = outputFileName, overwrite = T)
+                             '/GCM_', gcm, '_PC', pc, '.rData')
+    save(range, envMap, envModel, records, file = outputFileName, overwrite = T)
+    
+    if(!dir.exists('./predictions')) dir.create('./predictions') # create directory to store predictions
+    
+    if(exists('preds')) rm(preds)
+    preds <- getPredictions(speciesAb_, pc)
+    
+    preds <- projectRaster(preds, studyRegionRasts) # project predictions to study region
+    
+    ## mask by study region and force values to be within [0, 1] ##
+    # because the rasters can get pushed outside this during re-projection #
+    preds <- raster::calc(preds, fun = function(x) ifelse(x < 0, 0, x))
+    preds <- raster::calc(preds, fun = function(x) ifelse(x > 1, 1, x))
+    
+    for (i in 1:nlayers(preds)) {
+      landMask <- (1 - studyRegionRasts[[i]])
+      preds[[i]] <- preds[[i]] * landMask
+    }
+    
+    # names(preds) <- paste0('ybp', seq(21000, 0, by=-1000)) # rename rasters to respective year
+    
+    if(!dir.exists(paste0('./predictions/', gcm))) dir.create(paste0('./predictions/', gcm))
+    writeRaster(stack(preds), paste0('./predictions/', gcm, '/', speciesAb_, '_GCM_', gcm, '_PC', pc),
+                format = 'GTiff', overwrite = T)
+    
+    file.remove(list.files(path = paste0('./predictions/', gcm),
+                           pattern = '.xml',
+                           full.names = T))
+    
+    save.image(paste0('./workspaces/06 - predictions (', gcm, ')'))
+    
   }
-  sink()
 }
+
+sink()
