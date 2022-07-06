@@ -721,7 +721,7 @@ for(sp in speciesList) {
     
     outputFileName <- paste0('./models/predictions/', speciesAb_, 
                              '/GCM_', gcm, '_PC', pc, '.rData')
-    save(range, envMap, envModel, records, file = outputFileName, overwrite = T)
+    save(bg, range, envMap, envModel, records, file = outputFileName, overwrite = T)
     
     if(!dir.exists('./predictions')) dir.create('./predictions') # create directory to store predictions
     

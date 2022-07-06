@@ -12,6 +12,6 @@ module load GCC/8.3.0 OpenMPI/3.1.4 R/4.0.2
 
 cd /mnt/research/TIMBER/PVMvsENM/fraxinus/code
 
-Rscript ENM_template.R ccsm fraxinus 'Fraxinus americana, Fraxinus caroliniana, Fraxinus cuspidata, Fraxinus greggii, Fraxinus nigra, Fraxinus pennsylvanica, Fraxinus profunda, Fraxinus quadrangulata'
+Rscript ENM_template.R ecbilt fraxinus 'Fraxinus americana, Fraxinus caroliniana, Fraxinus cuspidata, Fraxinus greggii, Fraxinus nigra, Fraxinus pennsylvanica, Fraxinus profunda, Fraxinus quadrangulata'
 
 scontrol show job ${SLURM_JOB_ID}
