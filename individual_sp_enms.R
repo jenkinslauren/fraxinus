@@ -134,7 +134,8 @@ getClimRasts <- function(pc, climYear) { # retrieve clipped climate rasters for 
     
     for (n in 1:nlayers(envYr)) { # clip PCAs to study extent for given species
       x <- envYr[[n]]
-      x <- crop(x, extent(studyRegionRasts[[n]]))
+      studyRegionRasts <- projectExtent(studyRegionRasts, getCRS('wgs84'))
+      x <- crop(x, studyRegionRasts)
       projection(x) <- getCRS("WGS84")
       envDataClipped[[n]] <- x
     }
