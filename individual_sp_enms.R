@@ -53,9 +53,9 @@ if(cluster == T) { # constants for running on cluster
 } else { # constants for running locally
   ## genus constants ##
   genus <- 'fraxinus'
-  speciesList <- paste0('Fraxinus ', 
+  speciesList <- paste0('Fraxinus ',
                         c('americana', 'caroliniana','cuspidata',
-                          'greggii', 'nigra', 'pennsylvanica', 
+                          'greggii', 'nigra', 'pennsylvanica',
                           'profunda', 'quadrangulata'))
   
   baseFolder <- '/Volumes/lj_mac_22/MOBOT/by_genus/'
@@ -110,7 +110,8 @@ getClimRasts <- function(pc, climYear) { # retrieve clipped climate rasters for 
   
   ## load environment data from PCA ##
   if (file.exists(fileName)) {  # if already clipped to respective year, load that 
-    envData <- brick(fileName)
+    print(paste0('line 113, fileName = ', fileName))
+    envData <- stack(fileName)
     names(envData) <- paste0('pca', 1:pc) # rename raster layers to match pc
   } else { # otherwise, clip data to correct climate year
     pcPrediction <- list()
@@ -120,12 +121,12 @@ getClimRasts <- function(pc, climYear) { # retrieve clipped climate rasters for 
       pcPrediction[i] <- raster::predict(clim[[i]], pca, index = 1:pc)
       names(pcPrediction[[i]]) <- paste0("pc", 1:pc, "_", (i-1)*1000, "KYBP")
     }
-    
+    print("line 126")
     envDataPca <- stack(pcPrediction)
-    
+    print('line 128')
     envYr <- pcPrediction[[(climYear/1000) + 1]] # keep only the PCA rasters for given climate year
     names(envYr) <- paste0('pca', 1:pc) # label layers by pc
-    
+    print('line 131')
     ## sanity check for ensuring the rasters are in the correct projection
     # print("Ensure that the projection of these rasters is WGS84:")
     # print(paste0("Projection of envYr = ", projection(envYr)))
@@ -134,9 +135,10 @@ getClimRasts <- function(pc, climYear) { # retrieve clipped climate rasters for 
     
     for (n in 1:nlayers(envYr)) { # clip PCAs to study extent for given species
       x <- envYr[[n]]
-      studyRegionRasts <- projectExtent(studyRegionRasts, getCRS('wgs84'))
-      x <- crop(x, studyRegionRasts)
-      projection(x) <- getCRS("WGS84")
+      y <- studyRegionRasts[[(climYear/1000) + 1]]
+      y <- projectExtent(y, getCRS('wgs84'))
+      x <- crop(x, y)
+      projection(x) <- getCRS('wgs84')
       envDataClipped[[n]] <- x
     }
     
@@ -228,10 +230,12 @@ getPredictions <- function(speciesAb_, pc) { # predict suitability for a given y
     # plot(climate[[1]], main = paste0(climYear, ' ybp')) 
     
     # predict suitability #
+    print("line 231\n")
     thisPred <- predict(climate[[predictors]], 
                         envModel, 
                         clamp = F, 
                         type='cloglog')
+    print("line 236")
     names(thisPred) <- (paste0(yr, ' ybp'))
     # plot(thisPred, main = paste0("prediction at ", climYear, " ybp"))
     
@@ -566,9 +570,13 @@ for(sp in speciesList) {
     # identify study region
     studyRegionFileName <- paste0('./pollen/predictions-', 
                                   toupper(genus), '_meanpred_iceMask.tif')
+    print("line 569!\n")
+    print(studyRegionFileName)
     studyRegionRasts <- brick(studyRegionFileName)
+    names(studyRegionRasts) <- c(paste0("Fraxinus_pollen_predictions_", 0:21, "kybp"))
     
     envData <- getClimRasts(pc, climYear) # retrieve clipped env data for given climate year
+    print("line 574!\n")
     
     recordsFileName <- paste0('./species_records/03_', 
                               gsub(' ', '_', tolower(sp)), 
@@ -588,10 +596,12 @@ for(sp in speciesList) {
     records$longitude <- as.double(records$longitude)
     records$latitude <- as.double(records$latitude)
     
+    print("line 596")
     # extract environmental data at each occurrence point
     occsEnv <- raster::extract(envData, 
                                cbind(records$longitude, 
                                      records$latitude))
+    print("line 601")
     occsEnvDf <- as.data.frame(occsEnv) # convert to dataframe
     records <- cbind(records, occsEnvDf) # add to records dataframe
     
@@ -605,9 +615,11 @@ for(sp in speciesList) {
     
     if (any(is.na(rowSums(occsEnvDf)))) records <- records[-which(is.na(rowSums(occsEnvDf))), ] # remove records in water
     
+    print('line 615')
     # convert to sp object for visualization
     recordsSp <- SpatialPointsDataFrame(records[, ll], data = records,
                                         proj4 = getCRS('wgs84', TRUE))
+    print('line 619')
     
     # visualize points that fall in the water (colored in blue)
     plot(recordsSp, pch = 16, cex = 0.5, col = "red", 
@@ -644,6 +656,7 @@ for(sp in speciesList) {
     # otherwise, define bg points
     if(!file.exists(bgFileName)) getBG(bgFileName, calibRegionSpAlb)
     load(bgFileName)
+    print('line 656')
     
     # plot the bg sites to verify
     plot(bgTestSp, pch = 16, cex = 0.5, col = "red", 
@@ -724,11 +737,14 @@ for(sp in speciesList) {
                              '/GCM_', gcm, '_PC', pc, '.rData')
     save(bg, range, envMap, envModel, records, file = outputFileName, overwrite = T)
     
+    # put study regions in reverse order (from 21 KYBP to 0 KYBP)
+    studyRegionRasts <- unstack(studyRegionRasts)
+    studyRegionRasts <- stack(rev(studyRegionRasts))
+    
     if(!dir.exists('./predictions')) dir.create('./predictions') # create directory to store predictions
     
     if(exists('preds')) rm(preds)
     preds <- getPredictions(speciesAb_, pc)
-    
     preds <- projectRaster(preds, studyRegionRasts) # project predictions to study region
     
     ## mask by study region and force values to be within [0, 1] ##
@@ -750,6 +766,7 @@ for(sp in speciesList) {
     file.remove(list.files(path = paste0('./predictions/', gcm),
                            pattern = '.xml',
                            full.names = T))
+    
     
     save.image(paste0('./workspaces/06 - predictions (', gcm, ')'))
     
