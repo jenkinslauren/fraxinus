@@ -20,16 +20,20 @@ if (cluster == T) { # constants for running on cluster
   
   evalType <- args[1]
   evalType <- as.character(evalType)
+  print(paste0("evalType: ", evalType))
   
   gcmList <- args[2]
   gcmList <- unlist(gcmList)
+  print(paste0("gcmList: ", gcmList))
   
   genus <- args[3]
   genus <- as.character(genus)
+  print(paste0("genus: ", genus))
   
   speciesList <- args[4]
   speciesList <- strsplit(speciesList, split = ', ')
   speciesList <- unlist(speciesList)
+  print(paste0("speciesList: ", speciesList))
   
   baseFolder <- '/mnt/research/TIMBER/PVMvsENM/'
   setwd(paste0(baseFolder, genus, '/in/'))
@@ -78,8 +82,11 @@ for (gcm in gcmList) {
                             '/GCM_', gcm, '_PC', pc, '.rData')
     load(modelFileName) # load model object, bg, and records for given species
     
-    evalFolderName <- paste0('./models/model_evaluations/', speciesAb_, 
-                             '/', evalType, '_k_folds/')
+    evalFolderName <- paste0(baseFolder, genus, '/in/models/model_evaluations/', speciesAb_, '/')
+    if(!dir.exists(evalFolderName)) dir.create(evalFolderName, recursive = TRUE, 
+                                               showWarnings = FALSE)
+    
+    evalFolderName <- paste0(evalFolderName, evalType, '_k_folds/')
     if(!dir.exists(evalFolderName)) dir.create(evalFolderName, recursive = TRUE, 
                                                showWarnings = FALSE)
     
@@ -91,6 +98,7 @@ for (gcm in gcmList) {
     auc <- cbi <- rep(NA, 5)
     
     if (evalType == 'random') {
+      print("if statement = random")
       kPres <- kfold(records, k = 5) # k-folds for presences
       kBg <- kfold(bg, k = 5) # k-folds for backgrounds
       
@@ -111,13 +119,13 @@ for (gcm in gcmList) {
       #        cex=0.8
       # )
       
-      for(i in 1:5) { # for each k-fold
-        print(paste0('K-fold ', i, ':'))
+      for(j in 1:5) { # for each k-fold
+        print(paste0('K-fold ', j, ':'))
         
         # create training data, with presences/absences vector of 0/1 with all points 
         # EXCEPT the ones in the fold
-        envData <- rbind(records[kPres != i, predictors], bg[kBg != i, predictors])
-        presBg <- c(rep(1, sum(kPres != i)), rep(0, sum(kBg != i)))
+        envData <- rbind(records[kPres != j, predictors], bg[kBg != j, predictors])
+        presBg <- c(rep(1, sum(kPres != j)), rep(0, sum(kBg != j)))
         trainData <- cbind(presBg, envData)
         
         model_tune <- enmSdm::trainMaxNet(data = trainData, resp = 'presBg', 
@@ -126,19 +134,35 @@ for (gcm in gcmList) {
         
         # predict presences & background sites
         predPres <- raster::predict(model, 
-                                    newdata = records[kPres == i,],
+                                    newdata = records[kPres == j,],
                                     clamp = F,
                                     type = 'cloglog')
         predBg <- raster::predict(model, 
-                                  newdata = bg[kPres == i,],
+                                  newdata = bg[kPres == j,],
                                   clamp = F,
                                   type = 'cloglog')
         
-        save(model, model_tune, predPres, predBg, kPres, kBg,
-             file = paste0(evalFolderName, '/model_', i, '.Rdata'), overwrite = T)
+        print(paste0("eval folder name: ", evalFolderName))
         
+        evalFileName <- paste0(evalFolderName, 'model_', j, '.rData')
+        print(paste0("eval folder to save as: ", evalFileName))
+        
+        save(model, model_tune, predPres, predBg, kPres, kBg,
+             file = evalFileName, 
+             overwrite = T)
+        
+        # evaluate
+        thisEval <- evaluate(p = as.vector(predPres), a = as.vector(predBg))
+        thisAuc <- thisEval@auc
+        thisCbi <- contBoyce(pres = predPres, bg = predBg)
+        
+        # print(paste('AUC = ', round(thisAuc, 2), ' | CBI = ', round(thisCbi, 2)))
+        
+        auc[j] <- thisAuc
+        cbi[j] <- thisCbi
       }
     } else if (evalType == 'geo') {
+      print("if statement = geo")
       # create g-folds
       gPres <- geoFold(x = records, k = 5, minIn = 5, minOut = 10, longLat = ll)
       
@@ -157,8 +181,8 @@ for (gcm in gcmList) {
       # divide bg sites between training & test
       nearest <- apply(gDistance(sp.records, sp.randomBg, byid = T), 1, which.min)
       
-      for (k in 1:nrow(bg)) {
-        gTestBg[k] <- gPres[nearest[k]]
+      for (j in 1:nrow(bg)) {
+        gTestBg[j] <- gPres[nearest[j]]
       }
       
       for (m in 1:5) { # make training data frame with predictors 
@@ -187,21 +211,27 @@ for (gcm in gcmList) {
                                   clamp = F,
                                   type = 'cloglog')
         
+        print(paste0("eval folder name: ", evalFolderName))
+        modelFileName <- paste0(evalFolderName, 'model_', m, '.rData')
+        
+        print(paste0("eval folder to save as: ", modelFileName))
+        
         save(model, predPres, predBg, gPres, gTestBg, model_tune, 
-             file = paste0(evalFolderName, '/model ', m, '.Rdata'), compress = T)
+             file = modelFileName, 
+             overwrite = T)
+        
+        # evaluate
+        thisEval <- evaluate(p = as.vector(predPres), a = as.vector(predBg))
+        thisAuc <- thisEval@auc
+        thisCbi <- contBoyce(pres = predPres, bg = predBg)
+        
+        # print(paste('AUC = ', round(thisAuc, 2), ' | CBI = ', round(thisCbi, 2)))
+        
+        auc[m] <- thisAuc
+        cbi[m] <- thisCbi
         
       }
     }
-    
-    # evaluate
-    thisEval <- evaluate(p = as.vector(predPres), a = as.vector(predBg))
-    thisAuc <- thisEval@auc
-    thisCbi <- contBoyce(pres = predPres, bg = predBg)
-    
-    # print(paste('AUC = ', round(thisAuc, 2), ' | CBI = ', round(thisCbi, 2)))
-    
-    auc[m] <- thisAuc
-    cbi[m] <- thisCbi
   }
   
   save(auc, cbi, file = paste0(evalFolderName, '/auc_cbi_vals.Rdata'))
