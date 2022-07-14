@@ -1,4 +1,4 @@
-# ENM Template, Fagus
+# ENM Template, Fraxinus
 # Author: Lauren Jenkins
 # 25 January 2022
 # Last updated: 13 June 2022
@@ -573,7 +573,8 @@ for(sp in speciesList) {
     print("line 569!\n")
     print(studyRegionFileName)
     studyRegionRasts <- brick(studyRegionFileName)
-    names(studyRegionRasts) <- c(paste0("Fraxinus_pollen_predictions_", 0:21, "kybp"))
+    names(studyRegionRasts) <- c(paste0(tools::toTitleCase(genus), 
+                                        "_pollen_predictions_", 0:21, "kybp"))
     
     envData <- getClimRasts(pc, climYear) # retrieve clipped env data for given climate year
     print("line 574!\n")
