@@ -20,26 +20,22 @@ if (cluster == T) { # constants for running on cluster
   
   evalType <- args[1]
   evalType <- as.character(evalType)
-  print(paste0("evalType: ", evalType))
   
   gcmList <- args[2]
   gcmList <- unlist(gcmList)
-  print(paste0("gcmList: ", gcmList))
   
   genus <- args[3]
   genus <- as.character(genus)
-  print(paste0("genus: ", genus))
   
   speciesList <- args[4]
   speciesList <- strsplit(speciesList, split = ', ')
   speciesList <- unlist(speciesList)
-  print(paste0("speciesList: ", speciesList))
   
   baseFolder <- '/mnt/research/TIMBER/PVMvsENM/'
   setwd(paste0(baseFolder, genus, '/in/'))
   
 } else {
-  evalType <- 'random'
+  evalType <- 'geo'
   
   ## genus constants ##
   genus <- 'fraxinus'
@@ -82,7 +78,7 @@ for (gcm in gcmList) {
                             '/GCM_', gcm, '_PC', pc, '.rData')
     load(modelFileName) # load model object, bg, and records for given species
     
-    evalFolderName <- paste0(baseFolder, genus, '/in/models/model_evaluations/', speciesAb_, '/')
+    evalFolderName <- paste0('/mnt/home/f0103321/', genus, '/model_evaluations/', speciesAb_, '/')
     if(!dir.exists(evalFolderName)) dir.create(evalFolderName, recursive = TRUE, 
                                                showWarnings = FALSE)
     
@@ -98,7 +94,6 @@ for (gcm in gcmList) {
     auc <- cbi <- rep(NA, 5)
     
     if (evalType == 'random') {
-      print("if statement = random")
       kPres <- kfold(records, k = 5) # k-folds for presences
       kBg <- kfold(bg, k = 5) # k-folds for backgrounds
       
@@ -128,27 +123,24 @@ for (gcm in gcmList) {
         presBg <- c(rep(1, sum(kPres != j)), rep(0, sum(kBg != j)))
         trainData <- cbind(presBg, envData)
         
-        model_tune <- enmSdm::trainMaxNet(data = trainData, resp = 'presBg', 
-                                          classes = 'lpq', out = c('models', 'tuning'))
-        model <- model_tune$models[[1]]
+        eval_model_tune <- enmSdm::trainMaxNet(data = trainData, resp = 'presBg', 
+                                               classes = 'lpq', out = c('models', 'tuning'))
+        eval_model <- eval_model_tune$models[[1]]
         
         # predict presences & background sites
-        predPres <- raster::predict(model, 
+        predPres <- raster::predict(eval_model, 
                                     newdata = records[kPres == j,],
                                     clamp = F,
                                     type = 'cloglog')
-        predBg <- raster::predict(model, 
+        predBg <- raster::predict(eval_model, 
                                   newdata = bg[kPres == j,],
                                   clamp = F,
                                   type = 'cloglog')
         
-        print(paste0("eval folder name: ", evalFolderName))
+        evalFileName <- paste0(evalFolderName, 'model_', j, '.Rdata')
         
-        evalFileName <- paste0(evalFolderName, 'model_', j, '.rData')
-        print(paste0("eval folder to save as: ", evalFileName))
-        
-        save(model, model_tune, predPres, predBg, kPres, kBg,
-             file = evalFileName, 
+        save(eval_model, eval_model_tune, predPres, predBg, kPres, kBg, eval_model_tune,
+             file = evalFileName,
              overwrite = T)
         
         # evaluate
@@ -160,9 +152,11 @@ for (gcm in gcmList) {
         
         auc[j] <- thisAuc
         cbi[j] <- thisCbi
+        
+        # save.image(paste0('./models/model_evaluations/workspaces/', evalType, '/', 
+        #            gcm, '/', speciesAb_, '_model_', j))
       }
     } else if (evalType == 'geo') {
-      print("if statement = geo")
       # create g-folds
       gPres <- geoFold(x = records, k = 5, minIn = 5, minOut = 10, longLat = ll)
       
@@ -187,6 +181,7 @@ for (gcm in gcmList) {
       
       for (m in 1:5) { # make training data frame with predictors 
         # and vector of 1/0 for presence/background
+        print(paste0('G-fold ', m, ':'))
         
         envData <- rbind(
           records[gPres!=m, predictors],
@@ -197,27 +192,24 @@ for (gcm in gcmList) {
         trainData <- cbind(presBg, envData)
         
         # maxent model
-        model_tune <- enmSdm::trainMaxNet(data = trainData, resp = 'presBg', 
-                                          classes = 'lpq', out = c('models', 'tuning'))
-        model <- model_tune$models[[1]]
+        eval_model_tune <- enmSdm::trainMaxNet(data = trainData, resp = 'presBg', 
+                                               classes = 'lpq', out = c('models', 'tuning'))
+        eval_model <- eval_model_tune$models[[1]]
         
         # predict presences & background sites
-        predPres <- raster::predict(model, 
+        predPres <- raster::predict(eval_model, 
                                     newdata = records[gPres == m,],
                                     clamp = F,
                                     type = 'cloglog')
-        predBg <- raster::predict(model, 
+        predBg <- raster::predict(eval_model, 
                                   newdata = bg[gTestBg == m,],
                                   clamp = F,
                                   type = 'cloglog')
         
-        print(paste0("eval folder name: ", evalFolderName))
-        modelFileName <- paste0(evalFolderName, 'model_', m, '.rData')
+        evalFileName <- paste0(evalFolderName, 'model_', m, '.Rdata')
         
-        print(paste0("eval folder to save as: ", modelFileName))
-        
-        save(model, predPres, predBg, gPres, gTestBg, model_tune, 
-             file = modelFileName, 
+        save(eval_model, predPres, predBg, gPres, gTestBg, eval_model_tune,
+             file = evalFileName,
              overwrite = T)
         
         # evaluate
@@ -230,22 +222,22 @@ for (gcm in gcmList) {
         auc[m] <- thisAuc
         cbi[m] <- thisCbi
         
+        # save.image(paste0('./models/model_evaluations/workspaces/', evalType, '/', 
+        #            gcm, '/', speciesAb_, '_model_', m))
+        
       }
     }
+    a <- cbind(a, auc)
+    c <- cbind(c, cbi)
+    n <- ncol(a)
+    colnames(a)[n] <- colnames(c)[n] <- sp
   }
   
-  save(auc, cbi, file = paste0(evalFolderName, '/auc_cbi_vals.Rdata'))
   
-  a <- cbind(a, auc)
-  c <- cbind(c, cbi)
-  n <- ncol(a)
-  colnames(a)[n] <- colnames(c)[n] <- sp
+  write.xlsx(a, file = paste0('./models/model_evaluations/', evalType, '_evals.xlsx'), 
+             sheetName = paste0(gcm, '_auc'), append = T, row.names = F)
+  write.xlsx(c, file = paste0('./models/model_evaluations/', evalType, '_evals.xlsx'), 
+             sheetName = paste0(gcm, '_cbi'), append = T, row.names = F)
   
+  save(a, c, file = paste0('./models/model_evaluations/', gcm, '_evals.Rdata'))
 }
-
-write.xlsx(a, file = paste0('./models/model_evaluations/', evalType, '_evals.xlsx'), 
-           sheetName = paste0(gcm, '_auc'), append = T, row.names = F)
-write.xlsx(c, file = paste0('./models/model_evaluations/', evalType, '_evals.xlsx'), 
-           sheetName = paste0(gcm, '_cbi'), append = T, row.names = F)
-
-save(a, c, file = paste0('./models/model_evaluations/', gcm, '_evals.Rdata'))
