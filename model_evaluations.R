@@ -78,11 +78,12 @@ for (gcm in gcmList) {
                             '/GCM_', gcm, '_PC', pc, '.rData')
     load(modelFileName) # load model object, bg, and records for given species
     
-    evalFolderName <- paste0('/mnt/home/f0103321/', genus, '/model_evaluations/', speciesAb_, '/')
+    evalFolderName <- paste0('/mnt/home/f0103321/', genus, '/model_evaluations/', 
+                             evalType, '_k_folds/')
     if(!dir.exists(evalFolderName)) dir.create(evalFolderName, recursive = TRUE, 
                                                showWarnings = FALSE)
     
-    evalFolderName <- paste0(evalFolderName, evalType, '_k_folds/')
+    evalFolderName <- paste0(evalFolderName, speciesAb_, '/')
     if(!dir.exists(evalFolderName)) dir.create(evalFolderName, recursive = TRUE, 
                                                showWarnings = FALSE)
     
@@ -240,4 +241,66 @@ for (gcm in gcmList) {
              sheetName = paste0(gcm, '_cbi'), append = T, row.names = F)
   
   save(a, c, file = paste0('./models/model_evaluations/', gcm, '_evals.Rdata'))
+}
+
+### save AUC and CBI to Excel sheet ###
+
+evalTypes <- c('geo', 'random')
+
+## genus constants ##
+genus <- 'fagus'
+speciesList <- paste0('Fagus ', 
+                      c('grandifolia'))
+
+gcmList <- c('hadley', 'ccsm', 'ecbilt') # general circulation models for env data
+
+baseFolder <- '/Volumes/lj_mac_22/MOBOT/by_genus/'
+setwd(paste0(baseFolder, genus))
+for (evalType in evalTypes) {
+  for (gcm in gcmList) {
+    print(paste0("GCM = ", gcm))
+    
+    a <- data.frame(c(seq(1:5)))
+    c <- data.frame(c(seq(1:5)))
+    colnames(a)[1] <- colnames(c)[1] <- 'fold #'
+    
+    for (sp in speciesList) {
+      speciesAb_ <- sub("(.{4})(.*)", "\\1_\\2", 
+                        paste0(substr(sp,1,4), toupper(substr(sub("^\\S+\\s+", '', sp),1,1)), 
+                               substr(sub("^\\S+\\s+", '', sp),2,4)))
+      
+      evalFolderName <- paste0(baseFolder, genus, '/models/model_evaluations/', 
+                               evalType, '_k_folds/', speciesAb_, '/', gcm, '/')
+      
+      # variable to store auc & cbi output
+      auc <- cbi <- rep(NA, 5)
+      
+      for (m in 1:5) {
+        evalFileName <- paste0(evalFolderName, 'model_', m, '.Rdata')
+        
+        load(evalFileName)
+        
+        # evaluate
+        thisEval <- evaluate(p = as.vector(predPres), a = as.vector(predBg))
+        thisAuc <- thisEval@auc
+        thisCbi <- contBoyce(pres = predPres, bg = predBg)
+        
+        # print(paste('AUC = ', round(thisAuc, 2), ' | CBI = ', round(thisCbi, 2)))
+        
+        auc[m] <- thisAuc
+        cbi[m] <- thisCbi
+      }
+      a <- cbind(a, auc)
+      c <- cbind(c, cbi)
+      n <- ncol(a)
+      colnames(a)[n] <- colnames(c)[n] <- sp
+    }
+    
+    write.xlsx(a, file = paste0('./models/model_evaluations/', evalType, '_evals.xlsx'), 
+               sheetName = paste0(gcm, '_auc'), append = T, row.names = F)
+    write.xlsx(c, file = paste0('./models/model_evaluations/', evalType, '_evals.xlsx'), 
+               sheetName = paste0(gcm, '_cbi'), append = T, row.names = F)
+    
+    save(a, c, file = paste0('./models/model_evaluations/', gcm, '_evals.Rdata'))
+  }
 }
